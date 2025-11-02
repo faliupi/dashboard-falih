@@ -19,7 +19,6 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -36,7 +35,6 @@ import {
 } from "@/components/ui/table";
 import {
   ChartBarIcon,
-  ChevronDownIcon,
   Download,
   MoreHorizontal,
   SortAscIcon,
@@ -46,9 +44,15 @@ import Link from "next/link";
 import { useModalStore } from "@/hooks/use-modal-store";
 import { MeetingData } from "@/hooks/api/meeting-service-hooks";
 import ActionTooltip from "@/components/action-tooltip";
-import { RecognitionsDetail } from "@/hooks/api/recognition-service-hooks";
+import {
+  RecognitionsDetail,
+  useToggleMonitoring,
+} from "@/hooks/api/recognition-service-hooks";
 import { Label } from "@/components/ui/label";
 
+// ================================
+// Interface
+// ================================
 export interface UserParticipant {
   id: string;
   fullname: string;
@@ -66,6 +70,9 @@ export interface UserParticipant {
   };
 }
 
+// ================================
+// Fuzzy Filter
+// ================================
 const fuzzyFilter: FilterFn<UserParticipant> = (row, columnId, filterValue) => {
   const searchValue = filterValue.toLowerCase();
   if (row.original.user) {
@@ -87,11 +94,15 @@ const fuzzyFilter: FilterFn<UserParticipant> = (row, columnId, filterValue) => {
   return false;
 };
 
+// ================================
+// Header Status (ON/OFF)
+// ================================
 const StatusHeader: React.FC<{ isOn: boolean; toggle: () => void }> = ({
   isOn,
   toggle,
 }) => {
   const [open, setOpen] = React.useState(false);
+
   return (
     <div className="relative inline-block">
       <Button
@@ -111,7 +122,10 @@ const StatusHeader: React.FC<{ isOn: boolean; toggle: () => void }> = ({
               id="status-toggle"
               size="sm"
               variant={isOn ? "default" : "outline"}
-              onClick={toggle}
+              onClick={() => {
+                toggle();
+                setOpen(false);
+              }}
             >
               {isOn ? "ON" : "OFF"}
             </Button>
@@ -122,6 +136,9 @@ const StatusHeader: React.FC<{ isOn: boolean; toggle: () => void }> = ({
   );
 };
 
+// ================================
+// Main Component
+// ================================
 export default function Participants({
   participants,
   recognitionDetail,
@@ -132,11 +149,46 @@ export default function Participants({
   recognitionDetail: RecognitionsDetail;
 }) {
   const { onOpen } = useModalStore();
+  const toggleMonitoring = useToggleMonitoring();
   const [globalFilter, setGlobalFilter] = React.useState("");
-  const [statusOn, setStatusOn] = React.useState(true); // kontrol utama
+  const [statusOn, setStatusOn] = React.useState(true);
+
+  // 🔹 Saat pertama kali load, ambil status dari localStorage
+  React.useEffect(() => {
+    const savedStatus = localStorage.getItem("monitoringStatus");
+    if (savedStatus === "off") {
+      setStatusOn(false);
+    } else {
+      setStatusOn(true);
+    }
+  }, []);
+
+  // 🔹 Toggle status
+  const handleToggleMonitoring = () => {
+    const newState = !statusOn;
+    setStatusOn(newState);
+
+    // simpan ke localStorage agar tidak reset saat pindah halaman
+    localStorage.setItem("monitoringStatus", newState ? "on" : "off");
+
+    // kirim ke server tanpa blocking UI
+    toggleMonitoring
+      .mutateAsync({
+        meetingCode: meetingData.meetingCode,
+        isMonitoring: newState,
+      })
+      .catch(() => {
+        // jika gagal, rollback + perbarui localStorage
+        setStatusOn(!newState);
+        localStorage.setItem("monitoringStatus", !newState ? "off" : "on");
+      });
+  };
 
   const data = React.useMemo(() => participants, [participants]);
 
+  // ================================
+  // Columns Table
+  // ================================
   const columns = React.useMemo<ColumnDef<UserParticipant>[]>(() => {
     return [
       {
@@ -189,7 +241,7 @@ export default function Participants({
       {
         accessorKey: "status",
         header: () => (
-          <StatusHeader isOn={statusOn} toggle={() => setStatusOn(!statusOn)} />
+          <StatusHeader isOn={statusOn} toggle={handleToggleMonitoring} />
         ),
         cell: ({ row }) => {
           const { status, leave_count } = row.original;
@@ -215,7 +267,9 @@ export default function Participants({
                 )}
               </div>
             );
-          } else if (status === 0) {
+          }
+
+          if (status === 0) {
             return (
               <div className="flex items-center gap-2">
                 <span className="text-red-500">🔴</span>
@@ -227,14 +281,14 @@ export default function Participants({
                 )}
               </div>
             );
-          } else {
-            return (
-              <div className="flex items-center gap-2">
-                <span className="text-yellow-500">🟡</span>
-                <span>Pending</span>
-              </div>
-            );
           }
+
+          return (
+            <div className="flex items-center gap-2">
+              <span className="text-yellow-500">🟡</span>
+              <span>Pending</span>
+            </div>
+          );
         },
       },
       {
@@ -278,6 +332,9 @@ export default function Participants({
     ];
   }, [statusOn]);
 
+  // ================================
+  // React Table setup
+  // ================================
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] =
     React.useState<ColumnFiltersState>([]);
@@ -302,6 +359,9 @@ export default function Participants({
     state: { sorting, columnFilters, columnVisibility, rowSelection, globalFilter },
   });
 
+  // ================================
+  // Render UI
+  // ================================
   return (
     <div className="w-full">
       {/* Toolbar */}
